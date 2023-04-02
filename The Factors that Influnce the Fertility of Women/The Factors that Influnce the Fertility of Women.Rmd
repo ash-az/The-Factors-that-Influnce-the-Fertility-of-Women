@@ -1,0 +1,89 @@
+---
+title: 'The Factors that Influnce the Fertility of Women'
+author: "Arshia Azarhoush"
+output:
+  pdf_document: default
+  html_document:
+    df_print: paged
+---
+In this report, we will be investigating and determining which factors (duration, residence, education) and two-way interactions are related to the fertility rate of women.
+
+First, we will read the data and create a _fertility_ variable from _nChildren_ and _nMother_. Then, we can summaries the data as a table.
+
+```{r}
+data <- read.table(file ="assignment2_prob1.txt", header=TRUE)
+data$duration <- factor(data$duration, 
+                        levels=c("0-4","5-9","10-14","15-19","20-24","25-29"),
+                        ordered=TRUE)
+data$residence <- factor(data$residence, levels=c("Suva", "urban", "rural"))
+data$education <- factor(data$education, levels=c("none", "lower", "upper", "sec+"))
+data$fertility <- data$nChildren / data$nMother
+str(data)
+ftable(xtabs(cbind(fertility) ~ duration + residence + education, data))
+```
+Next, we can check for interaction between the explanatory variables. As we can observe, the slopes of residence against duration are almost parallel. It is likely that the interaction is insignificant. We also observe that the slopes of residence depend on education, and the slopes of education depend on duration. This tells us that there there may be two way interaction between them, which may affect the response variable. We should include the interaction terms in our model.
+```{r}
+with(data, interaction.plot(education, duration, fertility))
+with(data, interaction.plot(residence, duration, fertility))
+with(data, interaction.plot(residence, education, fertility))
+```
+Poisson regression looks to be a viable model as the number of children in each group is count data. We must take into account the number of mothers in each group as we are looking to model fertility rate.  
+We can model the rate per unit (fertility rate) using a log link via
+\begin{align}
+\log(\lambda_i / t_i) &= x_i^T \beta \\
+\end{align}
+so we model _nchildren_ by
+\begin{align}
+\log(\lambda_i) &= \log(t_i) + x_i^T \beta.
+\end{align}
+This is a form of Poisson glm with log-link, but the coefficient $\log(t_i)$ has been constrained to 1. This is called a rate model.
+```{r}
+model = glm(nChildren ~ offset(log(nMother)) + duration + residence + education + 
+              duration*education + education*residence, family = poisson, data)
+summary(model)
+```
+We can test the significance of interaction in our model using a chi-squred test. As it turns out, the interaction terms are not statistically significant in our model.
+```{r}
+anova(model, test = "Chi")
+```
+We can remove the interaction terms and model the data again.
+```{r}
+model2 = glm(nChildren ~ offset(log(nMother)) + duration + residence + education,
+             family = poisson, data)
+summary(model2)
+```
+We can utilize AIC in a Stepwise Algorithm to select the most statistically significant model. The full model has the lowest AIC so no further changes need to be made.
+```{r}
+model3 = step(model2, scope = ~.)
+```
+We can now check for outliers and points with significant impact by checking the leverage, jackknife residuals and Cook's distance of our data. Based on our tests, observations 17, 57 and 68 are influential points and may have high impact on our regression. These data points may be outliers or may have been subject to some errors (mis-recorded, etc.).
+```{r}
+library("faraway")
+par(mfrow=c(2,2))
+# Observation 68 has moderately high leverage
+halfnorm(influence(model2)$hat, ylab="Leverage")
+# Observation 17 looks influential
+halfnorm(rstudent(model2), ylab="Jacknife Residuals")
+# Observation 57 looks influential
+halfnorm(cooks.distance(model2), ylab="Cook's Distance")
+```
+We can remove observations 17, 57 and 68, and refit the model.
+```{r}
+model4 = glm(nChildren ~ offset(log(nMother)) + duration + residence + education, 
+                   family = poisson, data, subset = c(-57, -17, -68))
+summary(model4)
+```
+Now we can perform diagnostics to check how well our model fits the data. All of our tests generally look OK.
+```{r}
+par(mfrow=c(2,2))
+plot(residuals(model4) ~ predict(model4, type="response"))
+plot(residuals(model4) ~ predict(model4, type="link"))
+plot(residuals(model4, type="pearson") ~ predict(model4, type="link"))
+plot(residuals(model4, type="response") ~ predict(model4, type="link"))
+```
+Lastly, we can check for overdispersion. We can do this by estimating ${\phi}$ to see if it is close to 1. It is close enough to 1 to confirm that there is no overdispersion.
+```{r}
+(phihat <- sum(residuals(model4, type="pearson")^2) / 56)
+```
+In conclusion, to estimate the number of children per woman, we can use a Poisson model modeled on attributes about the mothers, such as the marriage duration, residence of families and the education level. We found a lack of two-way interaction between any of these attributes.
+
